@@ -27,6 +27,8 @@ class PoetryBuildTask(TaskExtensionPoint):
     async def build(self, *, additional_hooks=None):
         pkg = self.context.pkg
         args = self.context.args
+        if additional_hooks is None:
+            additional_hooks = []
 
         if pkg.type != "poetry.python":
             logger.error(
@@ -111,18 +113,28 @@ class PoetryBuildTask(TaskExtensionPoint):
         base_path = Path(args.install_base)
         logger.warning
         if (base_path / "local").exists():
-            logger.warning(f"Found 'local' directory under {base_path}, squashing...")
-            shutil.copytree(str(base_path / "local"), str(base_path), dirs_exist_ok=True)
-            shutil.rmtree(str(base_path / "local"))
+            logger.warning(f"Found 'local' directory under {base_path}, adding to AMENT_PREFIX_PATH")
+            additional_hooks += create_environment_hook(
+                "ament_prefix_path_local",
+                Path(args.install_base),
+                self.context.pkg.name,
+                "AMENT_PREFIX_PATH",
+                str(Path(args.install_base) / "local"),
+                mode="prepend",
+            )
 
         expected_install_path = get_python_install_path('purelib', {'base': base_path})
-        if expected_install_path.name == "site-packages":
-            # Check for dist-packages vs site-packages (https://lists.ubuntu.com/archives/ubuntu-devel/2009-February/027439.html)
-            for distdir in base_path.rglob("dist-packages"):
-                destdir = Path(expected_install_path).resolve()
-                logger.info(f"Found 'dist-packages' directory under {distdir}, moving to {destdir} (expected under debian)...")
-                shutil.copytree(str(distdir.resolve()), str(destdir.resolve()), dirs_exist_ok=True)
-                shutil.rmtree(str(distdir.resolve()))
+        # Check for dist-packages vs site-packages (https://lists.ubuntu.com/archives/ubuntu-devel/2009-February/027439.html)
+        for distdir in base_path.rglob("dist-packages"):
+            logger.warning(f"Found 'dist-packages' directory under {distdir}, adding to PYTHONPATH...")
+            additional_hooks += create_environment_hook(
+                "pythonpath_dist",
+                Path(args.install_base),
+                self.context.pkg.name,
+                "PYTHONPATH",
+                str(distdir),
+                mode="prepend",
+            )
 
         poetry_script_dir = Path(args.install_base) / "bin"
         if not poetry_script_dir.exists():
@@ -150,7 +162,7 @@ class PoetryBuildTask(TaskExtensionPoint):
 
         # This hook is normally defined by AmentPythonBuildTask, but since this class
         # replaces that, we have to define it ourselves
-        additional_hooks = create_environment_hook(
+        additional_hooks += create_environment_hook(
             "ament_prefix_path",
             Path(args.install_base),
             self.context.pkg.name,
